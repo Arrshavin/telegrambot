@@ -11,8 +11,8 @@ class Database:
 
     def create_tables(self):
         settings_query = """CREATE TABLE IF NOT EXISTS settings 
-             (user_id INTEGER PRIMARY KEY, lang TEXT DEFAULT 'en',
-                persona TEXT DEFAULT 'Julie_friend',
+             (user_id INTEGER PRIMARY KEY, lang TEXT DEFAULT 'id',
+                persona TEXT DEFAULT 'Mahira',
                 "model"	TEXT DEFAULT 'gpt-4')"""
         
         history_query = """CREATE TABLE IF NOT EXISTS history 
@@ -25,13 +25,13 @@ class Database:
         if self.conn:
             self.conn.close()
 
-    def insert_settings(self, user_id, lang='en', persona='Julie_friend',model='gpt-3.5-turbo'):
+    def insert_settings(self, user_id, lang='id', persona='Mahira',model='gpt-3.5-turbo'):
         query = """INSERT OR IGNORE INTO settings (user_id, lang, persona, model)
                  VALUES (?, ?, ?, ?)"""
         self.conn.execute(query, (user_id, lang, persona,model))
         self.conn.commit()
 
-    def update_settings(self, user_id, lang='en', persona='Julie_friend',model='gpt-3.5-turbo'):
+    def update_settings(self, user_id, lang='id', persona='Mahira',model='gpt-3.5-turbo'):
         query = """UPDATE settings SET lang=?, persona=?, model=? WHERE user_id=?"""
         self.conn.execute(query, (lang, persona, model, user_id))
         self.conn.commit()
