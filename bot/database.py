@@ -11,7 +11,7 @@ class Database:
 
     def create_tables(self):
         settings_query = """CREATE TABLE IF NOT EXISTS settings 
-             (user_id INTEGER PRIMARY KEY, lang TEXT DEFAULT 'id',
+             (user_id INTEGER PRIMARY KEY, lang TEXT DEFAULT 'en',
                 persona TEXT DEFAULT 'Mahira',
                 "model"	TEXT DEFAULT 'gpt-4')"""
         
