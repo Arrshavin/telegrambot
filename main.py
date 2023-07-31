@@ -168,9 +168,9 @@ async def select_size_handler(call: types.Message, state: FSMContext):
 @owner_only
 @dp.message_handler(commands=['toggledm'])
 async def toggle_dm(message: types.Message):
-    if message.from_user.username != owner_id:
-        await message.reply("Sorry, only the bot owner can use this command.")
-        return
+    #if message.from_user.username != owner_id:
+        #await message.reply("Sorry, only the bot owner can use this command.")
+        #return
     global dm_enabled 
     dm_enabled = not dm_enabled
     await message.reply(f"Direct messages are now {'enabled' if dm_enabled else 'disabled'}")
