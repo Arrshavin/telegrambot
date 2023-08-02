@@ -25,13 +25,13 @@ class Database:
         if self.conn:
             self.conn.close()
 
-    def insert_settings(self, user_id, lang='id', persona='Mahira',model='gpt-3.5-turbo'):
+    def insert_settings(self, user_id, lang='id', persona='Mahira',model='gpt-3.5-turbo-16k'):
         query = """INSERT OR IGNORE INTO settings (user_id, lang, persona, model)
                  VALUES (?, ?, ?, ?)"""
         self.conn.execute(query, (user_id, lang, persona,model))
         self.conn.commit()
 
-    def update_settings(self, user_id, lang='id', persona='Mahira',model='gpt-3.5-turbo'):
+    def update_settings(self, user_id, lang='id', persona='Mahira',model='gpt-3.5-turbo-16k'):
         query = """UPDATE settings SET lang=?, persona=?, model=? WHERE user_id=?"""
         self.conn.execute(query, (lang, persona, model, user_id))
         self.conn.commit()
