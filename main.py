@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import random
-
+from updater import SelfUpdating
 from io import BytesIO
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ChatType
@@ -15,6 +15,7 @@ import bot_service
 from replit_detector import ReplitFlaskApp
 
 service = bot_service.BotService()
+updater = SelfUpdating('noes14155/Telegrambot-with-GPT4free')
 storage = MemoryStorage()
 bot = Bot(token=service.BOT_TOKEN)
 owner_id = service.BOT_OWNER_ID
@@ -174,18 +175,24 @@ async def toggle_dm(message: types.Message):
     global dm_enabled 
     dm_enabled = not dm_enabled
     await message.reply(f"Direct messages are now {'enabled' if dm_enabled else 'disabled'}")
+    logging.info(
+            f"Direct Messages {'enabled' if dm_enabled else 'disabled'} by (id: {message.from_user.id})")
+        
         
 
 @dp.message_handler(content_types=["text"])
 async def chat_handler(call: types.Message):
-    
+    logging.info(
+            f'New message received from user {call.from_user.full_name} (id: {call.from_user.id})')
+        
     if not dm_enabled and call.chat.type == ChatType.PRIVATE:
         await call.reply("Direct messages are disabled by bot owner")
         return
     waiting_id = await create_waiting_message(chat_id=call.chat.id)
     response = await service.chat(call=call)
     await delete_waiting_message(chat_id=call.chat.id, waiting_id=waiting_id)
-    await bot.send_message(chat_id=call.chat.id, text=response)
+    response = service.escape_markdown(response)
+    await bot.send_message(chat_id=call.chat.id, text=response, parse_mode='MarkdownV2')
 
 
 @dp.message_handler(content_types=["voice", "audio"])
@@ -224,10 +231,10 @@ async def set_commands(user_id):
             command="/hello", description=f"🌟 {bot_messages['hello_description']}"
         ),
         types.BotCommand(
-            command="/img", description=f"🎨 {bot_messages['img_description']}"
+            command="/img", description="🎨 Generate image using Stable Diffusion"
         ),
         types.BotCommand(
-            command="/dalle",description="Generate image using DALLE-E"
+            command="/dalle",description="🎨 Generate image using DALLE-E"
         ),
         types.BotCommand(
             command="/lang", description=f"🌐 {bot_messages['lang_description']}"
@@ -259,6 +266,7 @@ async def main():
 
 
 if __name__ == "__main__":
+    updater.check_for_update()
     replit_app = ReplitFlaskApp()
     replit = replit_app.run()
     if not replit:

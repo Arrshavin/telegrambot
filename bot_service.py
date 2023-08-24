@@ -1,4 +1,6 @@
 import os
+import re
+import time
 import requests
 from colorama import Fore
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
@@ -12,11 +14,13 @@ from bot import (
     image_generator,
     language_manager,
     ocr,
+    plugin_manager,
     voice_transcript,
     web_search,
     yt_transcript,
+    chat_gpt
 )
-from bot import chat_gpt
+
 
 
 class BotService:
@@ -45,8 +49,7 @@ class BotService:
             print(Fore.WHITE,'Owner Id couldn\'t be determined. ToggleDM function will be disabled. To enable it add bot owner id to your environment variable')
         
         self.HG_IMG2TEXT = os.environ.get("HG_IMG2TEXT", 'https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large')
-        self.DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "en")
-        
+        self.DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "en")       
         self.PLUGINS = bool(os.environ.get("PLUGINS", True))
         
         os.makedirs("downloaded_files", exist_ok=True)
@@ -62,6 +65,7 @@ class BotService:
         self.gpt = chat_gpt.ChatGPT(self.CHIMERAGPT_KEY)
         self.ocr = ocr.OCR(config=" --psm 3 --oem 3 -l script//Devanagari")
         self.db.create_tables()
+        self.plugin = plugin_manager.PluginManager()
 
         self.plugins_dict = self.lm.plugin_lang["plugins_dict"]
         self.plugins_string = ""
@@ -70,8 +74,7 @@ class BotService:
         self.PLUGIN_PROMPT = self.lm.plugin_lang["PLUGIN_PROMPT"] + self.plugins_string
         if self.CHIMERAGPT_KEY != None:
             self.gpt.fetch_chat_models()
-            #self.gpt.models.append('bing')
-            self.gpt.models.append('getgpt')
+            
         self.personas = {}
         self.valid_sizes = ['256x256','512x512','1024x1024']
 
@@ -105,7 +108,6 @@ class BotService:
         bot_messages = self.lm.local_messages(user_id=user_id)
         self.db.delete_user_history(user_id=user_id)
         response = f"🧹 {bot_messages['history_cleared']}"
-
         return response
 
     async def help(self, user_id):
@@ -125,13 +127,12 @@ class BotService:
         bot_messages = self.lm.local_messages(user_id=user_id)
         markup = self.generate_keyboard("lang")
         response = bot_messages["lang_select"]
-
         return response, markup
 
     async def select_lang(self, user_id, user_message):
         bot_messages = self.lm.local_messages(user_id=user_id)
         lang_code = user_message
-
+        
         if lang_code in self.lm.available_lang["available_lang"]:
             self.lm.set_language(user_id, lang_code)
             markup = ReplyKeyboardRemove()
@@ -150,8 +151,9 @@ class BotService:
         return response, markup
     
     async def select_persona(self,user_id,user_message):
+        lang, persona, model = self.db.get_settings(user_id)
         if user_message in self.personas.keys():
-            self.db.update_settings(user_id,persona=user_message)
+            self.db.update_settings(user_id,lang,persona=user_message,model=model)
             response = f'Persona set to {user_message}.'
             await self.clear(user_id)
             markup = ReplyKeyboardRemove()
@@ -165,8 +167,9 @@ class BotService:
         return response, markup
     
     async def select_model(self,user_id,user_message):
+        lang, persona, model = self.db.get_settings(user_id)
         if user_message in self.gpt.models:
-            self.db.update_settings(user_id,model=user_message)
+            self.db.update_settings(user_id,lang,persona,model=user_message)
             response = f'Model set to {user_message}.'
             markup = ReplyKeyboardRemove()
         else:
@@ -181,7 +184,7 @@ class BotService:
     async def select_prompt(self, user_id, user_message, state):
         data = await state.get_data()
         command = data.get("command")
-        markup = None
+        markup = photo = None
         bot_messages = self.lm.local_messages(user_id=user_id)
         if command == '/img':
             client = Client("http://127.0.0.1:7860/")
@@ -218,7 +221,6 @@ class BotService:
             role, content = row
             history.append({"role": role, "content": content})
         
-        
         web_text = await self.ws.extract_text_from_website(user_message)
         if web_text is not None:
             prompt = web_text
@@ -226,22 +228,36 @@ class BotService:
         if yt_transcript is not None:
             prompt = yt_transcript
         EXTRA_PROMPT = bot_messages["EXTRA_PROMPT"]
-        text = await self.gpt.generate_response(
-            self.PLUGIN_PROMPT, EXTRA_PROMPT, {}, prompt, model=model
-        )
-        result, plugin_name = await self.ws.generate_query(text, self.plugins_dict)
         if user.first_name is not None:
             bot_messages["bot_prompt"] += f"You should address the user as '{user.first_name}'"
         bot_messages["bot_prompt"] += f"You should reply to the user in {lm} as a native. Even if the user queries in another language reply only in {lm}. Completely translated."
-
-        if result is None and plugin_name is None:
-            text = await self.gpt.generate_response(
-                    bot_messages["bot_prompt"], "", history, prompt, model=model
-                )
+        bot_messages["bot_prompt"] += f"/n Always stay in character as {persona}"
+        function = self.plugin.get_functions_specs() if self.PLUGINS else []
+        text = await self.gpt.generate_response(
+            bot_messages['bot_prompt'], EXTRA_PROMPT, history, prompt,function=function, model=model
+        )
+        
+        if isinstance(text, str):
+             return text
+        text = text["choices"][0]["message"]
+        if text['content']:
+            text = text['content']
         else:
-            text = await self.gpt.generate_response(
+            fn_name = text["function_call"]["name"]
+            arguments = text["function_call"]["arguments"]
+            result = await self.plugin.call_function(fn_name,arguments)
+            for i in range(3):
+                text = await self.gpt.generate_response(
                 bot_messages["bot_prompt"], result, history, prompt, model=model
-            )
+                )
+                try:
+                    text = text["choices"][0]["message"]['content']
+                    break
+                except:
+                    print(text,' Retrying after 3 seconds')
+                    time.sleep(3)
+                    continue
+
         self.db.insert_history(user_id=user_id, role="user", content=user_message)
         self.db.insert_history(user_id=user_id, role="assistant", content=text)
 
@@ -335,6 +351,11 @@ class BotService:
 
         return response
 
+    def escape_markdown(self,text):
+        escape_chars = ['_', '-', '!', '*', '[', ']', '(', ')', '~', '>', '#', '+', '=', '{','}','|','.']
+        regex = r"([%s])" % "|".join(map(re.escape, escape_chars))
+        return re.sub(regex, r"\\\1", text)
+    
     def generate_keyboard(self,key):
         if not isinstance(key, str):
             raise ValueError("key must be a string")

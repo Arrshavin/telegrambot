@@ -21,5 +21,10 @@ wolframalpha
 wikipedia
 pydub
 pycryptodome
+GitPython
 flask
 openai
+gtts
+pytube
+whois
+spotipy
