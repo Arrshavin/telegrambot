@@ -3,17 +3,18 @@ import logging
 import os
 import random
 from updater import SelfUpdating
-from io import BytesIO
-from aiogram import Bot, Dispatcher, types, Router, F
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.enums.chat_type import ChatType
-from aiogram.enums.chat_action import ChatAction
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
+from aiogram.types import FSInputFile, URLInputFile
 from functools import wraps
+from urllib.parse import urlparse
 
 import bot_service
+
 from replit_detector import ReplitFlaskApp
 
 service = bot_service.BotService()
@@ -145,7 +146,7 @@ async def select_prompt_handler(call: types.Message, state: FSMContext):
     if markup == None:
         waiting_id = await create_waiting_message(chat_id=call.chat.id)
         await bot.send_chat_action(chat_id=call.chat.id, action="upload_photo")
-        photo = open(filename, "rb")
+        photo = FSInputFile(filename)
         await bot.send_photo(chat_id=call.chat.id, photo=photo)
         await delete_waiting_message(chat_id=call.chat.id, waiting_id=waiting_id)
         os.remove(filename)
@@ -162,7 +163,12 @@ async def select_size_handler(call: types.Message, state: FSMContext):
         waiting_id = await create_waiting_message(chat_id=call.chat.id)
         await bot.send_chat_action(chat_id=call.chat.id, action="upload_photo")
         filename, markup = await service.select_size( user_id=call.from_user.id, user_message=call.text, state=state)
-        await bot.send_photo(chat_id=call.chat.id, photo=filename, reply_markup=markup)
+        parsed = urlparse(filename)
+        if parsed.scheme and parsed.netloc:
+            filename = URLInputFile(filename)
+            await bot.send_photo(chat_id=call.chat.id, photo=filename, reply_markup=markup)
+        else: 
+            await bot.send_message(chat_id=call.chat.id, text=filename, reply_markup=markup)
         await delete_waiting_message(chat_id=call.chat.id, waiting_id=waiting_id)
         await state.clear()
     else:
@@ -191,20 +197,28 @@ async def chat_handler(call: types.Message):
         await call.reply("Direct messages are disabled by bot owner")
         return
     waiting_id = await create_waiting_message(chat_id=call.chat.id)
-    response = await service.chat(call=call)
-        
-    await bot.send_chat_action(chat_id=call.chat.id, action="typing")
-    text = ''
-    
-    text = service.escape_markdown(response)
-    await bot.edit_message_text(chat_id=call.chat.id, message_id=waiting_id, text=text, parse_mode='MarkdownV2')
-        
-    #await delete_waiting_message(chat_id=call.chat.id, waiting_id=waiting_id)
-    #response = await service.chat(call=call)
-    #await delete_waiting_message(chat_id=call.chat.id, waiting_id=waiting_id)
-    #response = service.escape_markdown(response)
-    #await bot.send_message(chat_id=call.chat.id, text=response, parse_mode='MarkdownV2')
+    response_stream = service.chat(call=call)
+    full_text = sent_text = ''
+    chunk = 0
 
+    async for response in response_stream:
+       if isinstance(response, str):
+            full_text += response
+            if full_text == '': continue
+            chunk += 1
+            if chunk > 10:
+                chunk = 0
+            else:
+                continue
+            try:
+                await bot.edit_message_text(chat_id=call.chat.id, message_id=waiting_id, text=full_text)
+                sent_text = full_text
+            except:
+                continue
+
+    if full_text != '' and full_text != sent_text:
+        await bot.edit_message_text(chat_id=call.chat.id, message_id=waiting_id, text=full_text)    
+   
 
 @dp.message(F.content_type.in_({'voice','audio'}))
 async def voice_handler(call: types.Message):
@@ -270,10 +284,8 @@ async def set_commands(user_id):
     await bot.delete_my_commands()
     await bot.set_my_commands(commands)
 
-
 async def main():
     await asyncio.gather(set_commands(None), dp.start_polling(bot))
-
 
 if __name__ == "__main__":
     updater.check_for_update()
@@ -281,5 +293,6 @@ if __name__ == "__main__":
     replit = replit_app.run()
     if not replit:
         asyncio.run(main())
+
 
 service.db.close_connection()

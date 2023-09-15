@@ -39,9 +39,9 @@ class BotService:
             exit
         self.HG_TOKEN = os.getenv("HG_TOKEN")
         try:
-            self.CHIMERAGPT_KEY = os.getenv("CHIMERAGPT_KEY")
+            self.GPT_KEY = os.getenv("GPT_KEY")
         except:
-            print(Fore.RED,'Please add your chimeragpt apikey in your env file')
+            print(Fore.RED,'Please add your gpt apikey in your env file')
             exit
         try:
             self.BOT_OWNER_ID = os.getenv("BOT_OWNER_ID")
@@ -52,7 +52,7 @@ class BotService:
         self.HG_IMG2TEXT = os.environ.get("HG_IMG2TEXT", 'https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large')
         self.DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "en")       
         self.PLUGINS = bool(os.environ.get("PLUGINS", True))
-        self.API_BASE = os.environ.get("API_BASE", 'https://chimeragpt.adventblocks.cc/api/v1')
+        self.API_BASE = os.environ.get("API_BASE", 'localhost:1337')
         
         os.makedirs("downloaded_files", exist_ok=True)
         self.db = database.Database("chatbot.db")
@@ -64,7 +64,7 @@ class BotService:
         self.yt = yt_transcript.YoutubeTranscript()
         self.ft = file_transcript.FileTranscript()
         self.ig = image_generator.ImageGenerator(HG_IMG2TEXT=self.HG_IMG2TEXT)
-        self.gpt = chat_gpt.ChatGPT(self.CHIMERAGPT_KEY,self.API_BASE)
+        self.gpt = chat_gpt.ChatGPT(self.GPT_KEY,self.API_BASE)
         self.ocr = ocr.OCR(config=" --psm 3 --oem 3 -l script//Devanagari")
         self.db.create_tables()
         self.plugin = plugin_manager.PluginManager()
@@ -74,8 +74,11 @@ class BotService:
         for plugin in self.plugins_dict:
             self.plugins_string += f"\n{plugin}: {self.plugins_dict[plugin]}"
         self.PLUGIN_PROMPT = self.lm.plugin_lang["PLUGIN_PROMPT"] + self.plugins_string
-        if self.CHIMERAGPT_KEY != None:
+
+        if self.GPT_KEY != None:
             self.gpt.fetch_chat_models()
+        self.personas = {}
+        self.valid_sizes = ['256x256','512x512','1024x1024']
             
         self.personas = {}
         self.valid_sizes = ['256x256','512x512','1024x1024']
@@ -235,36 +238,54 @@ class BotService:
         bot_messages["bot_prompt"] += f"You should reply to the user in {lm} as a native. Even if the user queries in another language reply only in {lm}. Completely translated."
         bot_messages["bot_prompt"] += f"/n Always stay in character as {persona}"
         function = self.plugin.get_functions_specs() if self.PLUGINS else []
-        text = await self.gpt.generate_response(
-            bot_messages['bot_prompt'], EXTRA_PROMPT, history, prompt,function=function, model=model
+        collected_chunks = []
+        should_exit = False
+        fn_name = arguments = text =  ''
+        response_stream = self.gpt.generate_response(
+            bot_messages["bot_prompt"], bot_messages["EXTRA_PROMPT"], history, prompt,function=function, model=model
         )
-        
-        if isinstance(text, str):
-             return text
-        text = text["choices"][0]["message"]
-        if text['content']:
-            text = text['content']
-        else:
-            fn_name = text["function_call"]["name"]
-            arguments = text["function_call"]["arguments"]
-            result = await self.plugin.call_function(fn_name,arguments)
-            for i in range(3):
-                text = await self.gpt.generate_response(
-                bot_messages["bot_prompt"], result, history, prompt, model=model
-                )
+        for responses in response_stream:
+            if isinstance(responses, str):
+                text += responses
+                yield responses
+                should_exit = True
+                continue
+            response = responses["choices"][0]["delta"]
+            if 'function_call' in response:
+                if 'name' in response["function_call"]:
+                    fn_name += response["function_call"]["name"]
+                    continue
+                arguments += response["function_call"]["arguments"]
+            elif 'content' in response:
+                response = response['content']
+                text += response
+                yield response
+                should_exit = True
+            else:
+                yield response
+        if should_exit:
+            self.db.insert_history(user_id=user_id, role="assistant", content=text)
+            return      
+                
+        print(fn_name,arguments)
+        result = await self.plugin.call_function(fn_name,arguments)
+        for i in range(3):
+            response_stream = self.gpt.generate_response(
+            bot_messages["bot_prompt"], result, history, prompt, model=model
+            )
+            for text in response_stream:
                 try:
-                    text = text["choices"][0]["message"]['content']
-                    break
+                    text = text["choices"][0]["delta"]['content']
+                    yield text
                 except:
                     print(text,' Retrying after 3 seconds')
                     time.sleep(3)
-                    continue
+                    break
+            if isinstance(response_stream,str):
+                yield response_stream
 
-        self.db.insert_history(user_id=user_id, role="user", content=user_message)
+
         self.db.insert_history(user_id=user_id, role="assistant", content=text)
-
-        return text
-
     async def voice(self, user_id, file):
         lang, persona, model = self.db.get_settings(user_id)
         bot_messages = self.lm.local_messages(user_id=user_id)
@@ -370,7 +391,8 @@ class BotService:
                 builder.button(text=f"{self.lm.available_lang['languages'][lang_code]}({lang_code})")
         elif key == 'model':
             for model in self.gpt.models:
-                builder.button(text=model)
+                if model.startswith('gpt'):
+                    builder.button(text=model)
         elif key == 'size':
             for size in self.valid_sizes:
                 builder.button(text=size)

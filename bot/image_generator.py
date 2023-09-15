@@ -50,13 +50,12 @@ class ImageGenerator:
         return text
     
     async def dalle_generate(self, prompt, size):
-        response = openai.Image.create(
-            prompt=prompt,
-            size=size
-        )
-        image_url = response["data"][0]["url"]
-        async with aiohttp.ClientSession() as session:
-            async with session.get(image_url) as response:
-                content = await response.content.read()
-                img_file = io.BytesIO(content)
-                return img_file
+        try:
+            response = openai.Image.create(
+                prompt=prompt,
+                size=size
+            )
+            image_url = response["data"][0]["url"]
+        except Exception as e:
+            return str(e)
+        return image_url
